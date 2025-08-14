@@ -37,7 +37,7 @@ void readIMU() {
 
 void handleSensor() {
   readIMU();
-  StaticJsonDocument<256> doc;
+  JsonDocument doc(256);
   doc["pitch"] = pitch;
   doc["roll"] = roll;
   doc["heading"] = heading;
@@ -48,7 +48,7 @@ void handleSensor() {
 
 void handleWifi() {
   if (server.hasArg("plain")) {
-    StaticJsonDocument<256> doc;
+    JsonDocument doc(256);
     deserializeJson(doc, server.arg("plain"));
     const char* ssid = doc["ssid"];
     const char* password = doc["password"];
@@ -87,7 +87,7 @@ void setup() {
   Serial.begin(115200);
 #endif
   Wire.begin(SDA_PIN, SCL_PIN);
-  if (!imu.setup(Wire, 0x68)) {
+  if (!imu.setup(0x68)) {
     DEBUG_PRINTLN("IMU initialization unsuccessful");
     while (1) {
       delay(1000);

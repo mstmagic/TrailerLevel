@@ -16,19 +16,19 @@
 #define DEBUG_PRINTLN(x)
 #endif
 
-MPU9250 imu(Wire, 0x68);
+MPU9250 imu;
 WebServer server(80);
 Preferences prefs;
 
 float pitch = 0, roll = 0, heading = 0;
 
 void readIMU() {
-  imu.readSensor();
-  float ax = imu.getAccelX_mss();
-  float ay = imu.getAccelY_mss();
-  float az = imu.getAccelZ_mss();
-  float mx = imu.getMagX_uT();
-  float my = imu.getMagY_uT();
+  imu.update();
+  float ax = imu.getAccX();
+  float ay = imu.getAccY();
+  float az = imu.getAccZ();
+  float mx = imu.getMagX();
+  float my = imu.getMagY();
   pitch = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
   roll = atan2(ay, az) * 180.0 / PI;
   heading = atan2(my, mx) * 180.0 / PI;
@@ -37,7 +37,7 @@ void readIMU() {
 
 void handleSensor() {
   readIMU();
-  DynamicJsonDocument doc(256);
+  StaticJsonDocument<256> doc;
   doc["pitch"] = pitch;
   doc["roll"] = roll;
   doc["heading"] = heading;
@@ -48,7 +48,7 @@ void handleSensor() {
 
 void handleWifi() {
   if (server.hasArg("plain")) {
-    DynamicJsonDocument doc(256);
+    StaticJsonDocument<256> doc;
     deserializeJson(doc, server.arg("plain"));
     const char* ssid = doc["ssid"];
     const char* password = doc["password"];
@@ -87,7 +87,7 @@ void setup() {
   Serial.begin(115200);
 #endif
   Wire.begin(SDA_PIN, SCL_PIN);
-  if (imu.begin() < 0) {
+  if (!imu.setup(Wire, 0x68)) {
     DEBUG_PRINTLN("IMU initialization unsuccessful");
     while (1) {
       delay(1000);

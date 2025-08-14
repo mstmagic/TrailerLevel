@@ -37,7 +37,7 @@ void readIMU() {
 
 void handleSensor() {
   readIMU();
-  JsonDocument doc(256);
+  JsonDocument doc;
   doc["pitch"] = pitch;
   doc["roll"] = roll;
   doc["heading"] = heading;
@@ -48,7 +48,7 @@ void handleSensor() {
 
 void handleWifi() {
   if (server.hasArg("plain")) {
-    JsonDocument doc(256);
+    JsonDocument doc;
     deserializeJson(doc, server.arg("plain"));
     const char* ssid = doc["ssid"];
     const char* password = doc["password"];

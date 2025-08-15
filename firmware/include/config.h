@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef DEBUG_SERIAL
+#define DEBUG_SERIAL
+#endif
+
 // Default WiFi credentials
 const char* DEFAULT_SSID = "TrailerLevel";
 const char* DEFAULT_PASSWORD = "password";

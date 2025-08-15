@@ -4,7 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:multicast_dns/multicast_dns.dart';
+import 'package:wifi_iot/wifi_iot.dart';
 
 void main() {
   runApp(const TrailerLevelApp());
@@ -18,6 +18,8 @@ class TrailerLevelApp extends StatefulWidget {
 
 class _TrailerLevelAppState extends State<TrailerLevelApp> {
   String? deviceIp;
+  String apSsid = 'TrailerLevel';
+  String apPassword = 'password';
   double pitch = 0, roll = 0, heading = 0;
   double threshold = 10;
   final List<double> thresholds = [10, 5, 2.5, 1];
@@ -26,7 +28,7 @@ class _TrailerLevelAppState extends State<TrailerLevelApp> {
   @override
   void initState() {
     super.initState();
-    discoverDevice();
+    connectToDevice();
     _timer = Timer.periodic(const Duration(milliseconds: 500), (_) => fetchSensor());
   }
 
@@ -36,20 +38,19 @@ class _TrailerLevelAppState extends State<TrailerLevelApp> {
     super.dispose();
   }
 
-  Future<void> discoverDevice() async {
-    final client = MDnsClient();
-    await client.start();
-    await for (final PtrResourceRecord ptr in client.lookup<PtrResourceRecord>(
-        ResourceRecordQuery.serverPointer('_trailerlevel._tcp'))) {
-      await for (final SrvResourceRecord srv in client.lookup<SrvResourceRecord>(
-          ResourceRecordQuery.service(ptr.domainName))) {
-        await for (final IPAddressResourceRecord ip in client.lookup<IPAddressResourceRecord>(
-            ResourceRecordQuery.addressIPv4(srv.target))) {
-          setState(() => deviceIp = ip.address.address);
-        }
+  Future<void> connectToDevice() async {
+    try {
+      final list = await WiFiForIoTPlugin.loadWifiList();
+      final deviceNet = list.firstWhere((n) => n.ssid == apSsid, orElse: () => null);
+      if (deviceNet != null) {
+        await WiFiForIoTPlugin.connect(apSsid,
+            password: apPassword,
+            joinOnce: true,
+            security: NetworkSecurity.WPA,
+            withInternet: false);
+        setState(() => deviceIp = '192.168.4.1');
       }
-    }
-    client.stop();
+    } catch (_) {}
   }
 
   Future<void> fetchSensor() async {
@@ -79,8 +80,8 @@ class _TrailerLevelAppState extends State<TrailerLevelApp> {
     showDialog(
       context: context,
       builder: (context) {
-        final ssidController = TextEditingController();
-        final passController = TextEditingController();
+        final ssidController = TextEditingController(text: apSsid);
+        final passController = TextEditingController(text: apPassword);
         return AlertDialog(
           title: const Text('Change WiFi'),
           content: Column(
@@ -97,7 +98,10 @@ class _TrailerLevelAppState extends State<TrailerLevelApp> {
                   await http.post(Uri.parse('http://$deviceIp/wifi'),
                       headers: {'Content-Type': 'application/json'},
                       body: jsonEncode({'ssid': ssidController.text, 'password': passController.text}));
+                  apSsid = ssidController.text;
+                  apPassword = passController.text;
                   if (mounted) Navigator.pop(context);
+                  Future.delayed(const Duration(seconds: 2), connectToDevice);
                 },
                 child: const Text('Save')),
           ],

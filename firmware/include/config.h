@@ -1,8 +1,8 @@
 #pragma once
 
 // Default WiFi credentials
-const char* DEFAULT_SSID = "your_ssid";
-const char* DEFAULT_PASSWORD = "your_password";
+const char* DEFAULT_SSID = "TrailerLevel";
+const char* DEFAULT_PASSWORD = "password";
 
 // I2C pins for MPU-9250
 const int SDA_PIN = 5;

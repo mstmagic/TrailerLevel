@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^0.13.6
-  multicast_dns: ^0.3.0
+  wifi_iot: ^0.3.27
 
 dev_dependencies:
   flutter_test:

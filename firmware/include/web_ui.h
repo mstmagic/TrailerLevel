@@ -14,7 +14,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; background:var(--bg); color:var(--fg);
     font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; }
-  .wrap { max-width: 960px; margin:0 auto; padding:8px 12px 28px; }
+  .wrap { max-width: 960px; margin:0 auto; padding: 8px 12px calc(48px + env(safe-area-inset-bottom)); }
   header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0 16px; flex-wrap:wrap; }
   h1 { font-size:20px; margin:0; font-weight:600; letter-spacing:.3px; }
   .header-actions { display:flex; gap:8px; flex-wrap:wrap; }
@@ -65,10 +65,10 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
 
       <div class="card">
         <div class="row">
-          <div class="title">Motion</div>
+          <div class="title">Acceleration</div>
           <div class="btns">
             <button id="btn-orient">Orientation</button>
-            <button id="btn-mot-prec" class="btn-quiet">Motion: …</button>
+            <button id="btn-mot-prec" class="btn-quiet">Accel: …</button>
           </div>
         </div>
         <canvas id="cv-motion" width="800" height="600"></canvas>
@@ -94,16 +94,13 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
       <h2>Sensor Orientation</h2>
       <div class="form">
         <div class="form-row">
-          <label for="sel-forward">Forward axis</label>
-          <select id="sel-forward"></select>
-        </div>
-        <div class="form-row">
-          <label for="sel-right">Right axis</label>
-          <select id="sel-right"></select>
-        </div>
-        <div class="form-row">
-          <label for="sel-up">Up axis</label>
-          <select id="sel-up"></select>
+          <label for="sel-forward">Forward (sensor axis in level plane)</label>
+          <select id="sel-forward">
+            <option value="+X">+X</option>
+            <option value="-X">-X</option>
+            <option value="+Y">+Y</option>
+            <option value="-Y">-Y</option>
+          </select>
         </div>
       </div>
       <div class="actions">
@@ -140,21 +137,17 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
   // -------- Zoom / precision --------------------------------------------------
   function autoScale(){
     const w = Math.min(window.innerWidth, document.documentElement.clientWidth || 9999);
-    if (w < 340) return 0.65;
-    if (w < 380) return 0.72;
-    if (w < 420) return 0.78;
-    if (w < 520) return 0.85;
-    if (w < 620) return 0.92;
-    return 1.0;
+    if (w < 340) return 0.65; if (w < 380) return 0.72; if (w < 420) return 0.78;
+    if (w < 520) return 0.85; if (w < 620) return 0.92; return 1.0;
   }
   const params = new URLSearchParams(location.search);
   let manualScale = parseFloat(params.get('scale') || localStorage.getItem('scale') || '1');
   if (!isFinite(manualScale) || manualScale <= 0.3 || manualScale > 2) manualScale = 1;
-  function totalScale(){ return 0.8 * autoScale() * manualScale; } // base 0.8, then auto, then manual
+  function totalScale(){ return 0.8 * autoScale() * manualScale; }
 
-  const LEVEL_STEPS  = [45,20,10,5,2,1];               // degrees to ring edge
-  const MOTION_STEPS = [1.0,0.5,0.25,0.10,0.05,0.02];  // g full-scale
-  const ROLL_STEPS   = [180,120,90,60,30,15];          // dps full-scale
+  const LEVEL_STEPS  = [20,15,10,5,2,1];
+  const MOTION_STEPS = [0.250,0.100,0.025,0.005,0.001];
+  const ROLL_STEPS   = [180,120,90,60,30,15];
 
   let levIdx = +(localStorage.getItem('levIdx') || 2);
   let motIdx = +(localStorage.getItem('motIdx') || 0);
@@ -172,18 +165,13 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
   const cvRoll = $("#cv-roll"), ctxR = cvRoll.getContext("2d");
   let lastOkTs = 0;
 
-  // Orientation selects
-  const axisOptions = ["X","-X","Y","-Y","Z","-Z"];
-  function fillSelect(el){ el.innerHTML = axisOptions.map(a=>`<option value="${a}">${a}</option>`).join(""); }
-  fillSelect($("#sel-forward")); fillSelect($("#sel-right")); fillSelect($("#sel-up"));
-
   // Precision buttons
   const btnLev = $("#btn-lev-prec");
   const btnMot = $("#btn-mot-prec");
   const btnRol = $("#btn-roll-prec");
   function refreshPrecButtons(){
     btnLev.textContent = `Precision: ${LEVEL_STEPS[levIdx]}°`;
-    btnMot.textContent = `Motion: ±${MOTION_STEPS[motIdx]}g`;
+    btnMot.textContent = `Accel: ±${MOTION_STEPS[motIdx]}g`;
     btnRol.textContent = `Roll: ±${ROLL_STEPS[rolIdx]}°/s`;
   }
   refreshPrecButtons();
@@ -201,44 +189,31 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
     if (!ssid) { alert("SSID required"); return; }
     try {
       const r = await fetch("/wifi", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ ssid, password: pwd }) });
-      if (r.ok) {
-        const j = await r.json();
-        statusEl.textContent = `AP restarting → reconnect to "${j.ssid}"`;
-      } else {
-        statusEl.textContent = "Wi-Fi save failed";
-      }
+      if (r.ok) { const j = await r.json(); statusEl.textContent = `AP restarting → reconnect to "${j.ssid}"`; }
+      else { statusEl.textContent = "Wi-Fi save failed"; }
     } catch { statusEl.textContent = "Wi-Fi save failed"; }
     wifiModal.style.display="none";
   });
 
   // Orientation modal
   const orientModal = $("#orient-backdrop");
-  function openModal(){ orientModal.style.display="flex"; }
-  function closeModal(){ orientModal.style.display="none"; }
   $("#btn-orient").addEventListener("click", async ()=>{
     const o = await getOrientation();
-    if (o && o.legend) {
-      $("#sel-forward").value = o.legend.forward || "X";
-      $("#sel-right").value   = o.legend.right   || "Y";
-      $("#sel-up").value      = o.legend.up      || "Z";
-    }
-    openModal();
+    if (o && o.forward_hint) $("#sel-forward").value = o.forward_hint;
+    orientModal.style.display="flex";
   });
-  $("#btn-cancel").addEventListener("click", closeModal);
+  $("#btn-cancel").addEventListener("click", ()=>{ orientModal.style.display="none"; });
   $("#btn-save").addEventListener("click", async ()=>{
-    const ok = await setOrientation($("#sel-forward").value, $("#sel-right").value, $("#sel-up").value);
+    const ok = await setForwardHint($("#sel-forward").value);
     statusEl.textContent = ok ? "orientation saved" : "save failed";
     setTimeout(()=>statusEl.textContent="ok", 1200);
-    closeModal();
+    orientModal.style.display="none";
   });
 
   // API helpers
-  async function getOrientation(){
-    try { const r = await fetch("/orientation"); if(!r.ok) throw 0; return await r.json(); } catch { return null; }
-  }
-  async function setOrientation(forward,right,up){
-    const body = { forward, right, up };
-    const r = await fetch("/orientation",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+  async function getOrientation(){ try { const r = await fetch("/orientation"); if(!r.ok) throw 0; return await r.json(); } catch { return null; } }
+  async function setForwardHint(forward_hint){
+    const r = await fetch("/orientation",{ method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ forward_hint }) });
     return r.ok;
   }
   async function calibrate(){
@@ -251,224 +226,226 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
   // Utils
   function lerp(a,b,t){ return a + (b-a)*t; }
   function clamp(v, lo, hi){ return Math.min(hi, Math.max(lo, v)); }
-  function map01(v, fullScale){ return Math.min(1, Math.max(0, Math.abs(v)/fullScale)); }
+  function norm01(v, fs){ return Math.min(1, Math.max(0, Math.abs(v) / fs)); }
   function mix3(a,b,t){ return Math.round(lerp(a,b,t)); }
 
-  // -------- Level gauge ------------------------------------------------------
+  // -------- Level gauge (avg for display only) --------------------------------
   function drawLeveling(d){
-    const W = cvLevel._w, H = cvLevel._h;
-    const SCALE = totalScale();
-    const s = Math.min(W,H) * SCALE;
-    const cx = W/2, cy = H/2;
-    const R = s*0.35;
-    const fullDeg = LEVEL_STEPS[levIdx];
-    const pitch = d.pos_pitch_calibrated || 0;
-    const roll  = d.pos_roll_calibrated  || 0;
+    const W = cvLevel._w, H = cvLevel._h, SCALE = totalScale();
+    const s = Math.min(W,H)*SCALE, cx=W/2, cy=H/2, R=s*0.35, fullDeg=LEVEL_STEPS[levIdx];
+    const pitch = (typeof d.pos_pitch_avg==="number")? d.pos_pitch_avg : (d.pos_pitch_calibrated||0);
+    const roll  = (typeof d.pos_roll_avg==="number") ? d.pos_roll_avg  : (d.pos_roll_calibrated ||0);
 
     ctxL.clearRect(0,0,W,H);
 
     // ring
-    ctxL.beginPath(); ctxL.arc(cx, cy, R, 0, Math.PI*2);
-    ctxL.fillStyle = "#001c0e"; ctxL.fill();
-    ctxL.strokeStyle = "#1f1f1f"; ctxL.lineWidth = 2; ctxL.stroke();
+    ctxL.beginPath(); ctxL.arc(cx, cy, R, 0, Math.PI*2); ctxL.fillStyle="#001c0e"; ctxL.fill();
+    ctxL.strokeStyle="#1f1f1f"; ctxL.lineWidth=2; ctxL.stroke();
 
     // cross
-    ctxL.strokeStyle = "rgba(255,255,255,0.25)"; ctxL.lineWidth = 1;
-    ctxL.beginPath(); ctxL.moveTo(cx-R, cy); ctxL.lineTo(cx+R, cy); ctxL.stroke();
-    ctxL.beginPath(); ctxL.moveTo(cx, cy-R); ctxL.lineTo(cx, cy+R); ctxL.stroke();
+    ctxL.strokeStyle="rgba(255,255,255,0.25)"; ctxL.lineWidth=1;
+    ctxL.beginPath(); ctxL.moveTo(cx-R,cy); ctxL.lineTo(cx+R,cy); ctxL.stroke();
+    ctxL.beginPath(); ctxL.moveTo(cx,cy-R); ctxL.lineTo(cx,cy+R); ctxL.stroke();
 
-    // Labels: half the previous "double" size, but still pushed far out
-    ctxL.fillStyle = "#ffffff";
-    ctxL.textAlign = "center"; ctxL.textBaseline = "middle";
-    ctxL.font = Math.round(s*0.110)+"px system-ui, sans-serif"; // half of 0.220
-    const off = s*0.200;                                       // keep far to avoid chevrons
+    // "FWD" tag
+    ctxL.fillStyle="#00c853";
+    ctxL.font = Math.round(s*0.07)+"px system-ui, sans-serif";
+    ctxL.textAlign="center"; ctxL.textBaseline="bottom";
+    ctxL.fillText("FWD", cx, cy - R - s*0.08);
 
-    ctxL.fillText(pitch.toFixed(1)+"°",     cx, cy - R - off);
-    ctxL.fillText((-pitch).toFixed(1)+"°",  cx, cy + R + off);
-
+    // Labels (pitch/roll)
+    ctxL.fillStyle="#ffffff"; ctxL.textAlign="center"; ctxL.textBaseline="middle";
+    ctxL.font = Math.round(s*0.110)+"px system-ui, sans-serif";
+    const off = s*0.200;
+    ctxL.fillText(pitch.toFixed(1)+"°",    cx, cy - R - off);
+    ctxL.fillText((-pitch).toFixed(1)+"°", cx, cy + R + off);
     ctxL.save(); ctxL.translate(cx - R - off, cy); ctxL.rotate(-Math.PI/2);
     ctxL.fillText((-roll).toFixed(1)+"°", 0, 0); ctxL.restore();
-
     ctxL.save(); ctxL.translate(cx + R + off, cy); ctxL.rotate(Math.PI/2);
     ctxL.fillText((roll).toFixed(1)+"°", 0, 0); ctxL.restore();
 
-    // chevrons (outside)
-    const near = (v)=>Math.abs(v) < 0.5;
-    function chevron(x, y, dir){
+    // chevrons
+    const near=(v)=>Math.abs(v)<0.5;
+    function chevron(x,y,dir){
       const g = near(dir==="pt"?pitch:roll) ? "#00c853" : "#0a4023";
-      ctxL.fillStyle = g;
-      const w = s*0.05, h = s*0.035;
-      ctxL.beginPath(); ctxL.moveTo(x, y);
-      if (dir==="pt") { ctxL.lineTo(x-w, y-h); ctxL.lineTo(x+w, y-h); }
-      if (dir==="pb") { ctxL.lineTo(x-w, y+h); ctxL.lineTo(x+w, y+h); }
-      if (dir==="rl") { ctxL.lineTo(x-h, y-w); ctxL.lineTo(x-h, y+w); }
-      if (dir==="rr") { ctxL.lineTo(x+h, y-w); ctxL.lineTo(x+h, y+w); }
+      ctxL.fillStyle=g; const w=s*0.05, h=s*0.035;
+      ctxL.beginPath(); ctxL.moveTo(x,y);
+      if (dir==="pt"){ ctxL.lineTo(x-w,y-h); ctxL.lineTo(x+w,y-h); }
+      if (dir==="pb"){ ctxL.lineTo(x-w,y+h); ctxL.lineTo(x+w,y+h); }
+      if (dir==="rl"){ ctxL.lineTo(x-h,y-w); ctxL.lineTo(x-h,y+w); }
+      if (dir==="rr"){ ctxL.lineTo(x+h,y-w); ctxL.lineTo(x+h,y+w); }
       ctxL.closePath(); ctxL.fill();
     }
     chevron(cx, cy - R - s*0.035, "pt");
-    chevron(cx, cy + R + s*0.035, "pb");
+    chevron(cx, cy + R - s*0.035 + s*0.07, "pb");
     chevron(cx - R - s*0.035, cy, "rl");
     chevron(cx + R + s*0.035, cy, "rr");
 
-    // red dot mapping: fullDeg hits ~edge
+    // red dot (avg)
     const k = R*0.85 / fullDeg;
-    let dx = clamp(roll * k,  -R*0.85, R*0.85);
-    let dy = clamp(pitch * k, -R*0.85, R*0.85);
-    const mag = Math.hypot(dx, dy);
-    if (mag > R*0.85) { dx *= (R*0.85/mag); dy *= (R*0.85/mag); }
-
+    let dx = clamp(roll*k, -R*0.85, R*0.85), dy = clamp(pitch*k, -R*0.85, R*0.85);
+    const mag=Math.hypot(dx,dy); if (mag>R*0.85){ dx*= (R*0.85/mag); dy*= (R*0.85/mag); }
     ctxL.beginPath(); ctxL.arc(cx+dx, cy+dy, s*0.02, 0, Math.PI*2);
-    ctxL.fillStyle = "#ff1744"; ctxL.shadowColor = "#ff1744"; ctxL.shadowBlur = 8; ctxL.fill(); ctxL.shadowBlur = 0;
+    ctxL.fillStyle="#ff1744"; ctxL.shadowColor="#ff1744"; ctxL.shadowBlur=8; ctxL.fill(); ctxL.shadowBlur=0;
 
-    $("#txt-level").textContent = `pitch ${pitch.toFixed(2)}°, roll ${roll.toFixed(2)}° (±${fullDeg}° view)`;
+    $("#txt-level").textContent = `pitch ${pitch.toFixed(2)}°, roll ${roll.toFixed(2)}° (±${fullDeg}° view, avg)`;
   }
 
-  // -------- Shared arrows (motion & roll) with big numbers -------------------
-  function drawArrows(ctx, W, H, SCALE, values, labelEl, labelText, numbers, unit){
-    const s = Math.min(W,H) * SCALE;
-    const cx = W/2, cy = H/2;
-    ctx.clearRect(0,0,W,H);
-
-    // crosshair
-    ctx.strokeStyle = "#1f1f1f"; ctx.lineWidth = 2;
+  // -------- Shared drawing bits ---------------------------------------------
+  function drawAxisCross(ctx, cx, cy, s){
+    ctx.strokeStyle="#1f1f1f"; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(cx - s*0.4, cy); ctx.lineTo(cx + s*0.4, cy); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(cx, cy - s*0.4); ctx.lineTo(cx, cy + s*0.4); ctx.stroke();
-
-    function cardArrow(angleRad, t){
-      // tiny when idle
-      const len = lerp(s*0.02, s*0.34, clamp(t,0,1));
-      const w  = lerp(s*0.006, s*0.018, clamp(t,0,1));
-      const x2 = cx + Math.cos(angleRad)*len;
-      const y2 = cy + Math.sin(angleRad)*len;
-
-      // color: black -> green -> white
-      const mid = 0.6;
-      const t1 = clamp(t/mid, 0, 1);
-      const t2 = clamp((t-mid)/(1-mid), 0, 1);
-      const gR = mix3(0,0,t1) + mix3(0,255,t2);
-      const gG = mix3(0,200,t1) + mix3(200,255,t2);
-      const gB = mix3(0,80,t1) + mix3(80,255,t2);
-      const col = `rgb(${gR},${gG},${gB})`;
-
-      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = "round";
-      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x2, y2); ctx.stroke();
-
-      // head
-      const head = lerp(s*0.012, s*0.03, clamp(t,0,1));
-      const th = Math.atan2(y2-cy, x2-cx);
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - Math.cos(th - 0.6)*head, y2 - Math.sin(th - 0.6)*head);
-      ctx.lineTo(x2 - Math.cos(th + 0.6)*head, y2 - Math.sin(th + 0.6)*head);
-      ctx.closePath();
-      ctx.fillStyle = col;
-      ctx.fill();
-    }
-
-    // arrows
-    cardArrow(-Math.PI/2, values.up);
-    cardArrow( Math.PI/2, values.down);
-    cardArrow( 0,         values.right);
-    cardArrow( Math.PI,   values.left);
-
-    // Numbers like Leveling (half the previous double size) & pushed far out
-    if (numbers) {
-      ctx.fillStyle = "#ffffff";
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.font = Math.round(s*0.110)+"px system-ui, sans-serif"; // half of 0.220
-      const L = s*0.40;       // crosshair half-length
-      const off = s*0.200;    // keep outward beyond arrowheads
-
-      const fmt = (v)=>{
-        const av = Math.abs(v);
-        let d = 2;
-        if (unit === "°/s") d = (av>=100)?0:1;
-        if (unit === " g")  d = 2;
-        return v.toFixed(d) + unit;
-      };
-
-      ctx.fillText(fmt(numbers.top),    cx, cy - L - off);
-      ctx.fillText(fmt(numbers.bottom), cx, cy + L + off);
-
-      ctx.save(); ctx.translate(cx - L - off, cy); ctx.rotate(-Math.PI/2);
-      ctx.fillText(fmt(numbers.left), 0, 0); ctx.restore();
-
-      ctx.save(); ctx.translate(cx + L + off, cy); ctx.rotate(Math.PI/2);
-      ctx.fillText(fmt(numbers.right), 0, 0); ctx.restore();
-    }
-
-    if (labelEl) labelEl.textContent = labelText;
+  }
+  function colorForPeak(t){
+    const mid=0.6, t1=Math.min(1, Math.max(0, t/mid)), t2=Math.min(1, Math.max(0, (t-mid)/(1-mid)));
+    const gR = mix3(0,255,t2);
+    const gG = mix3(200,255,Math.max(t1,t2));
+    const gB = mix3(80,255,Math.max(t1,t2));
+    return `rgb(${gR},${gG},${gB})`;
+  }
+  function drawArrowForPeak(ctx, cx, cy, s, angleRad, t){
+    if (t<=0) return;
+    const len = lerp(s*0.02, s*0.34, Math.min(1, Math.max(0,t)));
+    const w  = lerp(s*0.006, s*0.018, Math.min(1, Math.max(0,t)));
+    const x2 = cx + Math.cos(angleRad)*len, y2 = cy + Math.sin(angleRad)*len;
+    const col = colorForPeak(t);
+    ctx.strokeStyle=col; ctx.lineWidth=w; ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(x2,y2); ctx.stroke();
+    const head = lerp(s*0.012, s*0.03, Math.min(1, Math.max(0,t))), th=Math.atan2(y2-cy,x2-cx);
+    ctx.beginPath(); ctx.moveTo(x2,y2);
+    ctx.lineTo(x2 - Math.cos(th - 0.6)*head, y2 - Math.sin(th - 0.6)*head);
+    ctx.lineTo(x2 - Math.cos(th + 0.6)*head, y2 - Math.sin(th + 0.6)*head);
+    ctx.closePath(); ctx.fillStyle=col; ctx.fill();
+  }
+  // Red tick: always draw, radius 0..max so 0 is visible at center
+  function drawRedTick(ctx, cx, cy, s, angleRad, tNorm){
+    const t = Math.min(1, Math.max(0, tNorm));
+    const r = t * (s * 0.34); // 0 → center, 1 → outer
+    const nx = -Math.sin(angleRad), ny = Math.cos(angleRad); // perpendicular
+    const px = cx + Math.cos(angleRad)*r;
+    const py = cy + Math.sin(angleRad)*r;
+    const half = s*0.03;
+    ctx.strokeStyle="#ff1744"; ctx.lineWidth = Math.max(1, s*0.006);
+    ctx.beginPath();
+    ctx.moveTo(px - nx*half, py - ny*half);
+    ctx.lineTo(px + nx*half, py + ny*half);
+    ctx.stroke();
   }
 
-  // -------- Motion (accelerometer) ------------------------------------------
+  // -------- Acceleration gauge (with numbers + always-on ticks) --------------
   function drawMotion(d){
-    const W = cvMotion._w, H = cvMotion._h;
-    const SCALE = totalScale();
-    const gFS = MOTION_STEPS[motIdx];
+    const W=cvMotion._w, H=cvMotion._h, SCALE=totalScale(), gFS=MOTION_STEPS[motIdx];
+    const s = Math.min(W,H)*SCALE, cx=W/2, cy=H/2;
 
-    const fwd = +(d.accel_forward || 0);
-    const rgt = +(d.accel_right   || 0);
+    // current signed values
+    const fwd=+(d.accel_forward||0), rgt=+(d.accel_right||0), up=+(d.accel_up||0);
 
-    const tF = map01(Math.max(0,  fwd), gFS);
-    const tB = map01(Math.max(0, -fwd), gFS);
-    const tR = map01(Math.max(0,  rgt), gFS);
-    const tL = map01(Math.max(0, -rgt), gFS);
+    // peaks (directional) from firmware
+    const ap = d.accel_peak || {};
+    const pF = +(ap.up||0), pB = +(ap.down||0), pR = +(ap.right||0), pL = +(ap.left||0);
 
-    drawArrows(
-      ctxM, W, H, SCALE,
-      { up:tF, down:tB, left:tL, right:tR },
-      $("#txt-motion"),
-      `accel f/r/u: ${fwd.toFixed(2)}, ${rgt.toFixed(2)}, ${+(d.accel_up||0).toFixed(2)} (±${gFS}g view)`,
-      { top:fwd, bottom:-fwd, left:-rgt, right:rgt },
-      " g"
-    );
+    // normalize peaks for arrow lengths
+    const tF = norm01(pF, gFS), tB = norm01(pB, gFS), tR = norm01(pR, gFS), tL = norm01(pL, gFS);
+
+    ctxM.clearRect(0,0,W,H);
+    drawAxisCross(ctxM, cx, cy, s);
+
+    // Peak arrows (thick)
+    drawArrowForPeak(ctxM, cx, cy, s, -Math.PI/2, tF); // forward (+)
+    drawArrowForPeak(ctxM, cx, cy, s,  Math.PI/2, tB); // backward (-)
+    drawArrowForPeak(ctxM, cx, cy, s,  0,          tR); // right (+)
+    drawArrowForPeak(ctxM, cx, cy, s,  Math.PI,    tL); // left  (-)
+
+    // Current ticks (always draw)
+    drawRedTick(ctxM, cx, cy, s, (fwd>=0 ? -Math.PI/2 : Math.PI/2), norm01(Math.abs(fwd), gFS));
+    drawRedTick(ctxM, cx, cy, s, (rgt>=0 ? 0 : Math.PI),             norm01(Math.abs(rgt), gFS));
+
+    // Directional numbers (live current values)
+    ctxM.fillStyle = "#ffffff";
+    ctxM.textAlign = "center"; ctxM.textBaseline = "middle";
+    ctxM.font = Math.round(s*0.110)+"px system-ui, sans-serif";
+    const L = s*0.40, off = s*0.200;
+    const fmt = (v)=> (Math.abs(v)>=1 ? v.toFixed(2) : v.toFixed(2)) + " g";
+
+    ctxM.fillText(fmt(fwd),      cx, cy - L - off);  // top: +forward
+    ctxM.fillText(fmt(-fwd),     cx, cy + L + off);  // bottom: -forward
+
+    ctxM.save(); ctxM.translate(cx - L - off, cy); ctxM.rotate(-Math.PI/2);
+    ctxM.fillText(fmt(-rgt), 0, 0); ctxM.restore(); // left: -right
+
+    ctxM.save(); ctxM.translate(cx + L + off, cy); ctxM.rotate(Math.PI/2);
+    ctxM.fillText(fmt(rgt), 0, 0); ctxM.restore();  // right: +right
+
+    $("#txt-motion").textContent =
+      `accel f/r/u: ${fwd.toFixed(2)}, ${rgt.toFixed(2)}, ${up.toFixed(2)} (peaks shown, ±${gFS}g view)`;
   }
 
-  // -------- Roll (gyro) ------------------------------------------------------
+  // -------- Roll (gyro) with numbers + ticks at zero -------------------------
   function drawRoll(d){
-    const W = cvRoll._w, H = cvRoll._h;
-    const SCALE = totalScale();
-    const dpsFS = ROLL_STEPS[rolIdx];
+    const W = cvRoll._w, H = cvRoll._h, SCALE = totalScale(), dpsFS = ROLL_STEPS[rolIdx];
+    const s = Math.min(W,H) * SCALE, cx = W/2, cy = H/2;
+    const r  = s * 0.34, thick = s * 0.04, arcDeg = 90, half = (arcDeg * Math.PI / 180) / 2;
 
+    // current signed rates (derived from directional components)
     const pitchRate = (+(d.gyro_pitchup||0)) - (+(d.gyro_pitchdown||0));
-    const rollRate  = (+(d.gyro_rollright||0)) - (+(d.gyro_rollleft||0));
+    const rollRate  = (+(d.gyro_rollright||0)) - (+(d.gyro_rollleft ||0)); // RIGHT positive
+    const turnRate  = (+(d.gyro_turnright||0)) - (+(d.gyro_turnleft ||0));
 
-    const tPU = map01(Math.max(0,  pitchRate), dpsFS);
-    const tPD = map01(Math.max(0, -pitchRate), dpsFS);
-    const tRR = map01(Math.max(0,  rollRate),  dpsFS);
-    const tRL = map01(Math.max(0, -rollRate),  dpsFS);
+    // peaks (directional) from firmware
+    const rp = d.roll_peak || {};
+    const pU = +(rp.up||0), pD = +(rp.down||0), pR = +(rp.right||0), pL = +(rp.left||0);
 
-    drawArrows(
-      ctxR, W, H, SCALE,
-      { up:tPU, down:tPD, left:tRL, right:tRR },
-      $("#txt-roll"),
-      `gyro pitch/roll/turn dps: ${pitchRate.toFixed(1)}, ${rollRate.toFixed(1)}, ${((+(d.gyro_turnright||0))-(+(d.gyro_turnleft||0))).toFixed(1)} (±${dpsFS}°/s view)`,
-      { top:pitchRate, bottom:-pitchRate, left:-rollRate, right:rollRate },
-      "°/s"
-    );
+    // normalized peak magnitudes
+    const tPU = norm01(pU, dpsFS), tPD = norm01(pD, dpsFS), tRight = norm01(pR, dpsFS), tLeft = norm01(pL, dpsFS);
 
-    // U-shaped roll overlays: black→green→white, invisible when 0
-    const s = Math.min(W,H) * SCALE;
-    const cx = W/2, cy = H/2;
-    function uShape(x,y,rot, t){
-      const rOuter = s*0.28, rInner = s*0.18, start = Math.PI*0.2, end = Math.PI*1.8;
-      const mid = 0.6;
-      const t1 = clamp(t/mid, 0, 1);
-      const t2 = clamp((t-mid)/(1-mid), 0, 1);
-      const gR = mix3(0,0,t1) + mix3(0,255,t2);
-      const gG = mix3(0,200,t1) + mix3(200,255,t2);
-      const gB = mix3(0,80,t1) + mix3(80,255,t2);
-      ctxR.save(); ctxR.translate(x,y); ctxR.rotate(rot);
-      ctxR.beginPath(); ctxR.arc(0,0,rOuter, start, end); ctxR.arc(0,0,rInner, end, start, true); ctxR.closePath();
-      ctxR.fillStyle = `rgb(${gR},${gG},${gB})`;
-      ctxR.globalAlpha = t;  // fades to invisible at 0
-      ctxR.fill(); ctxR.globalAlpha = 1;
+    ctxR.clearRect(0,0,W,H);
+    // Background circle
+    ctxR.save(); ctxR.strokeStyle = "rgba(255,255,255,0.15)"; ctxR.lineWidth = thick;
+    ctxR.beginPath(); ctxR.arc(cx, cy, r, 0, Math.PI*2); ctxR.stroke(); ctxR.restore();
+
+    // Peak arcs (90° each, aligned to axes)
+    function drawArc(ang, t){
+      if (t <= 0) return;
+      const col = colorForPeak(t);
+      ctxR.save();
+      ctxR.strokeStyle = col; ctxR.globalAlpha = 0.25 + 0.75 * t;
+      ctxR.lineCap = "round"; ctxR.lineWidth = thick;
+      ctxR.beginPath();
+      ctxR.arc(cx, cy, r, ang - half, ang + half);
+      ctxR.stroke();
       ctxR.restore();
     }
-    uShape(cx, cy - s*0.02, 0,          tPU);
-    uShape(cx, cy + s*0.02, Math.PI,    tPD);
-    uShape(cx - s*0.02, cy, -Math.PI/2, tRL);
-    uShape(cx + s*0.02, cy,  Math.PI/2, tRR);
+    // Up (-90), Right (0), Down (+90), Left (180)
+    drawArc(-Math.PI/2, tPU);
+    drawArc( 0,          tRight);
+    drawArc( Math.PI/2,  tPD);
+    drawArc( Math.PI,    tLeft);
+
+    // Axis cross
+    drawAxisCross(ctxR, cx, cy, s);
+
+    // Current thin red ticks — always draw (zero shows at center)
+    drawRedTick(ctxR, cx, cy, s, (pitchRate>=0 ? -Math.PI/2 : Math.PI/2), norm01(Math.abs(pitchRate), dpsFS));
+    drawRedTick(ctxR, cx, cy, s, (rollRate >=0 ? 0          : Math.PI),   norm01(Math.abs(rollRate),  dpsFS));
+
+    // Directional numbers (live current values)
+    ctxR.fillStyle = "#ffffff";
+    ctxR.textAlign = "center"; ctxR.textBaseline = "middle";
+    ctxR.font = Math.round(s*0.110)+"px system-ui, sans-serif";
+    const L = s*0.40, off = s*0.200;
+    const fmt = (v)=> (Math.abs(v)>=100 ? v.toFixed(0) : v.toFixed(1)) + "°/s";
+
+    ctxR.fillText(fmt(pitchRate),   cx, cy - L - off);  // top: pitch up +
+    ctxR.fillText(fmt(-pitchRate),  cx, cy + L + off);  // bottom: pitch down +
+
+    ctxR.save(); ctxR.translate(cx - L - off, cy); ctxR.rotate(-Math.PI/2);
+    ctxR.fillText(fmt(-rollRate), 0, 0); ctxR.restore(); // left: roll left +
+    ctxR.save(); ctxR.translate(cx + L + off, cy); ctxR.rotate(Math.PI/2);
+    ctxR.fillText(fmt(rollRate), 0, 0); ctxR.restore();  // right: roll right +
+
+    $("#txt-roll").textContent =
+      `gyro pitch/roll/turn dps: ${pitchRate.toFixed(1)}, ${rollRate.toFixed(1)}, ${turnRate.toFixed(1)} (peaks shown, ±${dpsFS}°/s view)`;
   }
 
   // -------- Poll loop --------------------------------------------------------
@@ -476,27 +453,19 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
     try{
       const r = await fetch("/sensor", { cache:"no-store" });
       if (!r.ok) throw 0;
-      const d = await r.json();
-      lastOkTs = performance.now();
-      statusEl.textContent = "ok";
-      drawLeveling(d);
-      drawMotion(d);
-      drawRoll(d);
+      const d = await r.json(); lastOkTs=performance.now(); statusEl.textContent="ok";
+      drawLeveling(d); drawMotion(d); drawRoll(d);
     } catch {
-      const dt = (performance.now()-lastOkTs)/1000;
-      statusEl.textContent = dt > 3 ? "offline" : "connecting...";
+      const dt=(performance.now()-lastOkTs)/1000;
+      statusEl.textContent = dt>3 ? "offline" : "connecting...";
     }
   }
 
   // -------- Canvas sizing ----------------------------------------------------
   function fitCanvas(cv){
-    const dpr = window.devicePixelRatio || 1;
-    const rect = cv.getBoundingClientRect();
-    const w = Math.max(260, Math.floor(rect.width));
-    const h = Math.max(240, Math.floor(rect.width * 0.65)); // tall enough for labels
-    cv.width = Math.round(w*dpr);
-    cv.height = Math.round(h*dpr);
-    cv._w = w; cv._h = h; // CSS px size
+    const dpr = window.devicePixelRatio || 1, rect=cv.getBoundingClientRect();
+    const w=Math.max(260, Math.floor(rect.width)), h=Math.max(240, Math.floor(rect.width*0.65));
+    cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr); cv._w=w; cv._h=h;
     cv.getContext("2d").setTransform(dpr,0,0,dpr,0,0);
   }
   function resizeAll(){ [cvLevel, cvMotion, cvRoll].forEach(fitCanvas); }
@@ -504,7 +473,7 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
 
   // Boot
   resizeAll();
-  const POLL_MS = Math.max(100, parseInt(params.get('ms') || '250', 10));
+  const POLL_MS = Math.max(100, parseInt(params.get('ms') || '200', 10));
   setInterval(tick, POLL_MS);
   tick();
 })();

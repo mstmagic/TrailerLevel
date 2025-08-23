@@ -1,10 +1,9 @@
 // main.cpp : ESP32 (ESP32-S3/C3) + MPU-6050/6500 + Wi-Fi AP + HTTP UI + Captive Portal
-// Key points:
-// - Orientation basis (off-axis OK) captured at Calibrate: UP from accel average, forward from +X/-X/+Y/-Y hint.
-// - Gravity removal: instantaneous tilt (Level) * measured gravity magnitude (no trailing).
-// - Leveling gauge uses EMA (display only) TL_LEVEL_AVG_TAU_MS.
-// - Firmware computes peak-hold (with decay) for Acceleration and Roll and exposes them via /sensor.
-// - Captive portal & redirects use http://<TL_DOMAIN><TL_WEB_UI_PATH>.
+// - Wildcard DNS to AP IP
+// - Global HTTP 302 to http://<TL_DOMAIN><TL_WEB_UI_PATH> for all paths and 404s
+// - mDNS publishes _http._tcp
+// - NO HTTPS (removed)
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <MPU6050_light.h>
@@ -14,6 +13,7 @@
 #include <ArduinoJson.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
+
 #include "config.h"
 #include "web_ui.h"
 
@@ -55,10 +55,7 @@ static inline void projOntoPlane(const float v[3], const float n[3], float out[3
 static const float AX_X[3] = {1,0,0}, AX_Y[3] = {0,1,0};
 
 struct OrientBasis {
-  float fwd[3];   // trailer forward (unit in sensor frame)
-  float rgt[3];   // trailer right
-  float up[3];    // trailer up
-  bool  valid = false;
+  float fwd[3]; float rgt[3]; float up[3]; bool valid=false;
 } g_basis;
 
 static String g_forwardHint = "+X"; // allowed: +X, -X, +Y, -Y
@@ -73,9 +70,7 @@ static void buildBasisFromUpAndHint(const float up_s[3]){
   float fwd[3]; projOntoPlane(cand, up, fwd);
   float rgt[3]; cross3(fwd, up, rgt); normalize3(rgt);
   float tmp[3]; cross3(up, rgt, tmp); normalize3(tmp);
-  fwd[0]=tmp[0]; fwd[1]=tmp[1]; fwd[2]=tmp[2];
-
-  memcpy(g_basis.fwd, fwd, sizeof(fwd));
+  memcpy(g_basis.fwd, tmp, sizeof(tmp));
   memcpy(g_basis.rgt, rgt, sizeof(rgt));
   memcpy(g_basis.up,  up,  sizeof(up));
   g_basis.valid = true;
@@ -83,60 +78,46 @@ static void buildBasisFromUpAndHint(const float up_s[3]){
 
 static void toTrailer(float sx, float sy, float sz, float& fwd, float& rgt, float& up){
   if (!g_basis.valid) { fwd = rgt = up = 0; return; }
-  float v[3] = { sx, sy, sz };
+  const float v[3] = { sx, sy, sz };
   fwd = dot3(v, g_basis.fwd);
   rgt = dot3(v, g_basis.rgt);
   up  = dot3(v, g_basis.up);
 }
 
 // -------- Pose/accel/gyro, zeros & EMA --------
-static float pos_pitch_raw=0, pos_roll_raw=0;                     // deg
-static float pos_pitch_calibrated=0, pos_roll_calibrated=0;       // deg
-static float pos_pitch_zero=0, pos_roll_zero=0;                   // deg
+static float pos_pitch_raw=0, pos_roll_raw=0;
+static float pos_pitch_calibrated=0, pos_roll_calibrated=0;
+static float pos_pitch_zero=0, pos_roll_zero=0;
 
 static float accel_x_raw=0, accel_y_raw=0, accel_z_raw=0;
 static float gyro_x_raw=0,  gyro_y_raw=0,  gyro_z_raw=0;
 
-// Accel (gravity removed) in trailer frame
 static float accel_forward=0, accel_backward=0;
 static float accel_right=0,  accel_left=0;
 static float accel_up=0,     accel_down=0;
 
-// Gyro in trailer frame split into signed magnitudes
-static float gyro_pitchup=0,  gyro_pitchdown=0;   // about trailer RIGHT (+/-)
-static float gyro_rollright=0, gyro_rollleft=0;   // about trailer FORWARD (RIGHT = positive)
-static float gyro_turnright=0, gyro_turnleft=0;   // about trailer UP
+static float gyro_pitchup=0,  gyro_pitchdown=0;
+static float gyro_rollright=0, gyro_rollleft=0;
+static float gyro_turnright=0, gyro_turnleft=0;
 
-// EMA for Leveling (display only)
 static float pos_pitch_avg=0, pos_roll_avg=0;
 static uint32_t lastAvgMs=0; static bool avgInit=false;
 
-// Gravity magnitude (in g), measured at Calibrate; default if unset
 static float g_mag = TL_GRAVITY_G_DEFAULT;
-
-// Gravity components (debug)
 static float g_fwd_sub=0, g_rgt_sub=0, g_up_sub=0;
 
-static float finiteOr(float v, float fb=0.0f){ return isfinite(v)?v:fb; }
-
-// -------- Peak-hold structures (with decay) --------
 struct Peak4 { float up=0, down=0, left=0, right=0; };
-static Peak4 g_accelPeak;      // in g (directional)
-static Peak4 g_rollPeak;       // in dps (directional)
+static Peak4 g_accelPeak, g_rollPeak;
 static uint32_t accelPeakLastMs=0, rollPeakLastMs=0;
 
 static void updatePeak(Peak4& peak, const Peak4& nowvals, uint32_t& lastMs, float tau_ms){
   uint32_t now = millis();
-  if (lastMs == 0) {
-    peak = nowvals;
-    lastMs = now;
-    return;
-  }
+  if (lastMs == 0) { peak = nowvals; lastMs = now; return; }
   uint32_t dt = now - lastMs; if (dt > 2000) dt = 2000;
   float alpha = 1.0f - expf(-(float)dt / tau_ms);
   auto step = [&](float cur, float p)->float{
-    if (cur > p) return cur;               // immediate rise to new peak
-    return p + alpha * (cur - p);          // decay toward current
+    if (cur > p) return cur;
+    return p + alpha * (cur - p);
   };
   peak.up    = step(nowvals.up,    peak.up);
   peak.down  = step(nowvals.down,  peak.down);
@@ -232,11 +213,9 @@ static void readIMU() {
     } else { gyro_x_raw=gyro_y_raw=gyro_z_raw=0; }
   }
 
-  // Map accel into trailer frame (raw)
   float af_raw, ar_raw, au_raw;
   toTrailer(accel_x_raw, accel_y_raw, accel_z_raw, af_raw, ar_raw, au_raw);
 
-  // Pose from oriented raw accel (not gravity-removed)
   float denom = sqrtf(ar_raw*ar_raw + au_raw*au_raw); if (denom < 1e-6f) denom=1e-6f;
   pos_pitch_raw = atan2f(-af_raw, denom) * 180.0f / PI;
   pos_roll_raw  = atan2f( ar_raw, au_raw ) * 180.0f / PI;
@@ -245,7 +224,6 @@ static void readIMU() {
   pos_pitch_calibrated = wrap180(pos_pitch_raw - pos_pitch_zero);
   pos_roll_calibrated  = wrap180(pos_roll_raw  - pos_roll_zero);
 
-  // EMA for Leveling (display only)
   uint32_t now = millis();
   if (!avgInit) { pos_pitch_avg=pos_pitch_calibrated; pos_roll_avg=pos_roll_calibrated; avgInit=true; lastAvgMs=now; }
   else {
@@ -257,7 +235,6 @@ static void readIMU() {
     lastAvgMs=now;
   }
 
-  // Gravity removal using instantaneous Level ONLY
   float pr = pos_pitch_calibrated * (PI/180.0f);
   float rr = pos_roll_calibrated  * (PI/180.0f);
   g_fwd_sub = -sinf(pr) * g_mag;
@@ -273,7 +250,6 @@ static void readIMU() {
   accel_right   = ar; accel_left     = -ar;
   accel_up      = au; accel_down     = -au;
 
-  // Gyro vector → trailer frame (RIGHT positive per convention)
   float gf, gr, gu; toTrailer(gyro_x_raw, gyro_y_raw, gyro_z_raw, gf, gr, gu);
   gyro_pitchup    = max(0.0f, +gr);
   gyro_pitchdown  = max(0.0f, -gr);
@@ -282,8 +258,6 @@ static void readIMU() {
   gyro_turnright  = max(0.0f, +gu);
   gyro_turnleft   = max(0.0f, -gu);
 
-  // -------- Update peak-hold (directional) with decay --------
-  // Accel currents per direction (non-negative)
   Peak4 accNow;
   accNow.up    = max(0.0f,  accel_forward);
   accNow.down  = max(0.0f, -accel_forward);
@@ -291,7 +265,6 @@ static void readIMU() {
   accNow.left  = max(0.0f, -accel_right);
   updatePeak(g_accelPeak, accNow, accelPeakLastMs, (float)TL_ACCEL_PEAK_TAU_MS);
 
-  // Roll currents per direction (non-negative)
   Peak4 rollNow;
   rollNow.up    = gyro_pitchup;
   rollNow.down  = gyro_pitchdown;
@@ -312,50 +285,54 @@ static String hostUrl(const char* path){
 }
 static String mdnsHostLabel(){ String s=TL_DOMAIN; s.toLowerCase(); int dot=s.indexOf('.'); if(dot>0) s.remove(dot); return s; }
 
+// Global 302 to the UI at TL_DOMAIN
+static void send302ToUI() {
+  String ui = hostUrl(TL_WEB_UI_PATH);  // http://<TL_DOMAIN>[:port]/...
+  server.sendHeader("Location", ui, true);
+  server.send(302, "text/plain", "Redirecting to UI...");
+}
+
 static void startCaptiveDNS() {
   apIP = WiFi.softAPIP();
   dnsServer.stop();
   dnsServer.setTTL(TL_DNS_TTL_SECONDS);
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServer.start(53, "*", apIP);
+  dnsServer.start(53, "*", apIP);  // wildcard to AP IP
 }
-static void captiveHtml200() {
-  String ui = hostUrl(TL_WEB_UI_PATH);
-  server.send(200, "text/html",
-    String(F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-             "<title>Trailer Level</title>"
-             "<p>Opening UI… If not, <a href='")) + ui + F("'>tap here</a>."
-             "<script>location.replace('") + ui + F("')</script>"));
-}
+
+// Redirect handler used for all captive probes and unknown paths
+static void redirectAny(){ send302ToUI(); }
+
 static void registerCaptiveRoutes() {
-  server.on("/", HTTP_GET, captiveHtml200);
+  // Redirect for common captive probes
+  server.on("/", HTTP_ANY, redirectAny);
   // Android
-  server.on("/generate_204", HTTP_GET, captiveHtml200);
-  server.on("/gen_204", HTTP_GET, captiveHtml200);
-  server.on("/google/generate_204", HTTP_GET, captiveHtml200);
-  server.on("/connectivity-check", HTTP_GET, captiveHtml200);
-  server.on("/connectivitycheck.gstatic.com/generate_204", HTTP_GET, captiveHtml200);
+  server.on("/generate_204", HTTP_ANY, redirectAny);
+  server.on("/gen_204", HTTP_ANY, redirectAny);
+  server.on("/google/generate_204", HTTP_ANY, redirectAny);
+  server.on("/connectivity-check", HTTP_ANY, redirectAny);
+  server.on("/connectivitycheck.gstatic.com/generate_204", HTTP_ANY, redirectAny);
   // Apple
-  server.on("/hotspot-detect.html", HTTP_GET, captiveHtml200);
-  server.on("/success.html", HTTP_GET, captiveHtml200);
-  server.on("/library/test/success.html", HTTP_GET, captiveHtml200);
-  server.on("/captive.apple.com", HTTP_GET, captiveHtml200);
+  server.on("/hotspot-detect.html", HTTP_ANY, redirectAny);
+  server.on("/success.html", HTTP_ANY, redirectAny);
+  server.on("/library/test/success.html", HTTP_ANY, redirectAny);
+  server.on("/captive.apple.com", HTTP_ANY, redirectAny);
   // Windows
-  server.on("/ncsi.txt", HTTP_GET, captiveHtml200);
-  server.on("/connecttest.txt", HTTP_GET, captiveHtml200);
-  server.on("/www.msftconnecttest.com/connecttest.txt", HTTP_GET, captiveHtml200);
-  // Chrome / misc
-  server.on("/canonical.html", HTTP_GET, captiveHtml200);
+  server.on("/ncsi.txt", HTTP_ANY, redirectAny);
+  server.on("/connecttest.txt", HTTP_ANY, redirectAny);
+  server.on("/www.msftconnecttest.com/connecttest.txt", HTTP_ANY, redirectAny);
+  // Chrome and misc
+  server.on("/canonical.html", HTTP_ANY, redirectAny);
 
-  server.onNotFound(captiveHtml200);
+  // Catch everything else (all 404s)
+  server.onNotFound(redirectAny);
 }
 
-// ---------------- HTTP handlers ----------------
+// ---------------- HTTP API handlers ----------------
 static void handleSensor() {
   readIMU();
   JsonDocument doc;
 
-  // Pose (instant + averaged)
   doc["pos_pitch_raw"]        = pos_pitch_raw;
   doc["pos_roll_raw"]         = pos_roll_raw;
   doc["pos_pitch_calibrated"] = pos_pitch_calibrated;
@@ -363,16 +340,13 @@ static void handleSensor() {
   doc["pos_pitch_avg"]        = pos_pitch_avg;
   doc["pos_roll_avg"]         = pos_roll_avg;
 
-  // Raw sensor
   doc["accel_x_raw"]=accel_x_raw; doc["accel_y_raw"]=accel_y_raw; doc["accel_z_raw"]=accel_z_raw;
   doc["gyro_x_raw"]=gyro_x_raw;   doc["gyro_y_raw"]=gyro_y_raw;   doc["gyro_z_raw"]=gyro_z_raw;
 
-  // Accel (gravity removed) in trailer frame (current)
   doc["accel_forward"]=accel_forward; doc["accel_backward"]=accel_backward;
   doc["accel_right"]=accel_right;     doc["accel_left"]=accel_left;
   doc["accel_up"]=accel_up;           doc["accel_down"]=accel_down;
 
-  // Accel peaks (directional)
   {
     JsonObject ap = doc["accel_peak"].to<JsonObject>();
     ap["up"]    = g_accelPeak.up;
@@ -381,17 +355,14 @@ static void handleSensor() {
     ap["right"] = g_accelPeak.right;
   }
 
-  // Gravity components we subtracted (for debugging)
   doc["gravity_forward"]=g_fwd_sub;
   doc["gravity_right"]=g_rgt_sub;
   doc["gravity_up"]=g_up_sub;
 
-  // Gyro split (current directional magnitudes)
   doc["gyro_pitchup"]=gyro_pitchup;     doc["gyro_pitchdown"]=gyro_pitchdown;
   doc["gyro_rollright"]=gyro_rollright; doc["gyro_rollleft"]=gyro_rollleft;
   doc["gyro_turnright"]=gyro_turnright; doc["gyro_turnleft"]=gyro_turnleft;
 
-  // Roll peaks (directional)
   {
     JsonObject rp = doc["roll_peak"].to<JsonObject>();
     rp["up"]    = g_rollPeak.up;
@@ -426,11 +397,9 @@ static void handleCalibrate() {
   pos_roll_zero  = atan2f( rgtPose, upPose ) * 180.0f / PI;
   saveCalibration();
 
-  // Reset peak-hold so they start fresh
   g_accelPeak = Peak4{}; accelPeakLastMs = millis();
   g_rollPeak  = Peak4{}; rollPeakLastMs  = millis();
 
-  // Reset smoothing
   pos_pitch_avg = pos_roll_avg = 0.0f; avgInit=true; lastAvgMs=millis();
 
   JsonDocument resp; resp["status"]="ok"; resp["forward_hint"]=g_forwardHint; resp["g_mag"]=g_mag;
@@ -456,9 +425,9 @@ static void handleOrientation() {
     doc["forward_hint"] = g_forwardHint;
 
     JsonObject basis = doc["basis"].to<JsonObject>();
-    JsonArray f = basis["forward"].to<JsonArray>(); f.add(g_basis.fwd[0]); f.add(g_basis.fwd[1]); f.add(g_basis.fwd[2]);
-    JsonArray r = basis["right"].to<JsonArray>();   r.add(g_basis.rgt[0]); r.add(g_basis.rgt[1]); r.add(g_basis.rgt[2]);
-    JsonArray u = basis["up"].to<JsonArray>();      u.add(g_basis.up[0]);  u.add(g_basis.up[1]);  u.add(g_basis.up[2]);
+    { JsonArray f = basis["forward"].to<JsonArray>(); f.add(g_basis.fwd[0]); f.add(g_basis.fwd[1]); f.add(g_basis.fwd[2]); }
+    { JsonArray r = basis["right"].to<JsonArray>();   r.add(g_basis.rgt[0]); r.add(g_basis.rgt[1]); r.add(g_basis.rgt[2]); }
+    { JsonArray u = basis["up"].to<JsonArray>();      u.add(g_basis.up[0]);  u.add(g_basis.up[1]);  u.add(g_basis.up[2]); }
 
     String json; serializeJson(doc, json); sendJson(200, json);
     return;
@@ -533,7 +502,7 @@ static void handleWifiUpdate() {
   server.send(200,"application/json",resp);
 }
 
-// ---------------- Wi-Fi / mDNS / AP -----------------------------------------
+// ---------------- Wi-Fi, mDNS, AP ----------------
 static void setupWifiEvents() {
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
     DEBUG_PRINT("AP client connected AID="); DEBUG_PRINTLN(info.wifi_ap_staconnected.aid);
@@ -542,17 +511,23 @@ static void setupWifiEvents() {
     DEBUG_PRINT("AP client disconnected AID="); DEBUG_PRINTLN(info.wifi_ap_stadisconnected.aid);
   }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
 }
+
 static bool startMDNSHost(){
   String label = mdnsHostLabel();
+  MDNS.end();   // end previous instance if any
+  delay(10);
   if (MDNS.begin(label.c_str())) {
     MDNS.addService("http","tcp",TL_HTTP_PORT);
     DEBUG_PRINT("mDNS up: http://"); DEBUG_PRINT(label); DEBUG_PRINTLN(".local");
     return true;
   }
-  DEBUG_PRINTLN("mDNS failed"); return false;
+  DEBUG_PRINTLN("mDNS failed");
+  return false;
 }
+
 static bool startAP(const String& ssid, const String& pwd) {
   WiFi.mode(WIFI_AP);
+  WiFi.softAPsetHostname(mdnsHostLabel().c_str());
   WiFi.setTxPower(TL_AP_TX_POWER);
 
   IPAddress ip, gw, mask;
@@ -569,6 +544,7 @@ static bool startAP(const String& ssid, const String& pwd) {
   if (ok) { startCaptiveDNS(); startMDNSHost(); }
   return ok;
 }
+
 static void setupWifi() {
   setupWifiEvents();
   prefs.begin("wifi", true);
@@ -578,7 +554,7 @@ static void setupWifi() {
   startAP(ssid, password);
 }
 
-// ---------------- IMU bring-up ----------------
+// ---------------- IMU bring up ----------------
 static bool initIMU() {
   Wire.setClock(400000);
   Wire.setTimeOut(1000);
@@ -626,7 +602,7 @@ void setup() {
   server.on("/orientation", HTTP_OPTIONS, [](){ addCORS(); server.send(204); });
   server.on("/wifi", HTTP_OPTIONS, [](){ addCORS(); server.send(204); });
 
-  // Captive portal
+  // Captive portal + global redirect
   registerCaptiveRoutes();
 
   server.begin();
@@ -637,12 +613,15 @@ void loop() {
   server.handleClient();
   mpu.update();
 
-  // Apply pending Wi-Fi change after response has been sent
+  // Apply pending Wi-Fi change
   if (g_wifiPending.apply && (int32_t)(millis()-g_wifiPending.at_ms)>=0){
     g_wifiPending.apply=false;
-    WiFi.softAPdisconnect(true); delay(150);
+    MDNS.end();
+    WiFi.softAPdisconnect(true);
+    delay(150);
     if (!startAP(g_wifiPending.ssid, g_wifiPending.password)) {
-      WiFi.softAPdisconnect(true); delay(150);
+      WiFi.softAPdisconnect(true);
+      delay(150);
       startAP(TL_DEFAULT_SSID, TL_DEFAULT_PASSWORD);
     }
   }
